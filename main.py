@@ -20,7 +20,7 @@ DB_PATH = os.path.join(DATA_DIR, "elite_processed_ids.txt")
 
 llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash", temperature=0.1)
 
-# （此处保留你的 ELITE_VENUES 和 API_VENUES_STR 定义，为节省篇幅略过）
+
 ELITE_VENUES = [
     "ICLR", "International Conference on Learning Representations",
     "NeurIPS", "Neural Information Processing Systems", "NIPS",
@@ -41,7 +41,7 @@ ELITE_VENUES = [
 API_VENUES_STR = "ICLR,NeurIPS,NIPS,ICML,AAAI,IJCAI,ACL,EMNLP,NAACL,CVPR,ICCV,ECCV,Nature,Science"
 
 # =================================================================
-# 2. 检索逻辑 (与原版基本一致，移除了 display 替换为 print)
+# 2. 检索逻辑 
 # =================================================================
 def fetch_from_api_with_retry(endpoint, params):
     max_retries = 3
@@ -112,7 +112,7 @@ def fetch_elite_papers(query, target_count=1, search_limit=100):
         print(f"✅ 第一轮检索达标！共找到 {len(refined_list)} 篇。")
         return refined_list[:target_count]
 
-    print(f"⚠️ 顶会数量不足，开启全局图谱搜索作为替补...")
+    print(f"⚠️ 顶会论文数量不足，开启全局图谱搜索作为替补...")
     stage2_data = fetch_from_api_with_retry(endpoint, base_params)
     for p in stage2_data:
         processed_p = process_and_score_paper(p)
@@ -186,7 +186,20 @@ def analyze_and_report(papers):
     with open("REPORT_CONTENT.md", "w", encoding="utf-8") as f:
         f.write(full_report)
 
+# =================================================================
+# 4. 执行入口 (用户配置区)
+# =================================================================
 if __name__ == "__main__":
-    topic = "LLM Agents planning reasoning"
-    top_papers = fetch_elite_papers(topic, target_count=1)
-    analyze_and_report(top_papers)
+    # 👇 [用户修改区] 在这里填入你想追踪的学术关键词
+    TOPIC = "LLM Agents planning reasoning"
+    
+    # 👇 [用户修改区] 每天你想看几篇论文？(建议 1-3 篇,过多的论文会触发ai的限流)
+    TARGET_COUNT = 1
+
+    print(f"🔍 启动任务：搜索【{TOPIC}】领域的顶级论文...")
+    
+    # 运行图谱检索
+    top_papers = fetch_elite_papers(TOPIC, target_count=TARGET_COUNT)
+    
+    # 运行 AI 深度分析并导出报告
+    analyze_and_report(top_papers))
