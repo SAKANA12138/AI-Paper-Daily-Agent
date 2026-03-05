@@ -202,4 +202,4 @@ if __name__ == "__main__":
     top_papers = fetch_elite_papers(TOPIC, target_count=TARGET_COUNT)
     
     # 运行 AI 深度分析并导出报告
-    analyze_and_report(top_papers))
+    analyze_and_report(top_papers)
