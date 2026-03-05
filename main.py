@@ -20,7 +20,6 @@ DB_PATH = os.path.join(DATA_DIR, "elite_processed_ids.txt")
 
 llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash", temperature=0.1)
 
-
 ELITE_VENUES = [
     "ICLR", "International Conference on Learning Representations",
     "NeurIPS", "Neural Information Processing Systems", "NIPS",
@@ -41,7 +40,7 @@ ELITE_VENUES = [
 API_VENUES_STR = "ICLR,NeurIPS,NIPS,ICML,AAAI,IJCAI,ACL,EMNLP,NAACL,CVPR,ICCV,ECCV,Nature,Science"
 
 # =================================================================
-# 2. 检索逻辑 
+# 2. 检索逻辑 (已更新 pool_size 和 batch_size 逻辑)
 # =================================================================
 def fetch_from_api_with_retry(endpoint, params):
     max_retries = 3
@@ -49,6 +48,8 @@ def fetch_from_api_with_retry(endpoint, params):
     for i in range(max_retries):
         response = requests.get(endpoint, params=params)
         if response.status_code == 200:
+            # 💡 在 GitHub Actions 中建议增加小量延迟，防止请求过快
+            time.sleep(1.5)
             return response.json().get("data", [])
         elif response.status_code == 429:
             print(f"⚠️ 触发频率限制，等待 {retry_delay} 秒后重试...")
@@ -59,10 +60,14 @@ def fetch_from_api_with_retry(endpoint, params):
             return []
     return []
 
-def fetch_elite_papers(query, target_count=1, search_limit=100):
+def fetch_elite_papers(query, pool_size=50, batch_size=50):
+    """
+    pool_size: 想要凑齐的候选池大小
+    batch_size: 每次翻页请求的数量
+    """
     endpoint = "https://api.semanticscholar.org/graph/v1/paper/search"
     base_params = {
-        "query": query, "limit": search_limit,
+        "query": query, "limit": batch_size,
         "fields": "title,venue,year,abstract,citationCount,influentialCitationCount,externalIds,authors,publicationVenue",
         "year": "2023-2026"
     }
@@ -98,33 +103,54 @@ def fetch_elite_papers(query, target_count=1, search_limit=100):
         seen_ids.add(pid)
         return p
 
-    print("💎 正在扫描学术金字塔顶端数据 (第一阶段：锁定顶会)...")
-    stage1_params = base_params.copy()
-    stage1_params["venue"] = API_VENUES_STR
-    stage1_data = fetch_from_api_with_retry(endpoint, stage1_params)
-    for p in stage1_data:
-        processed_p = process_and_score_paper(p)
-        if processed_p:
-            refined_list.append(processed_p)
+    # -----------------------------------------------------------------
+    # 第一阶段：锁定顶会 (循环翻页直到凑够)
+    # -----------------------------------------------------------------
+    print(f"💎 正在扫描顶会数据 (凑齐 {pool_size} 篇候选)...")
+    offset = 0
+    while len(refined_list) < pool_size and offset < 1000:
+        stage1_params = base_params.copy()
+        stage1_params["venue"] = API_VENUES_STR
+        stage1_params["offset"] = offset
+        
+        data = fetch_from_api_with_retry(endpoint, stage1_params)
+        if not data: break
+        
+        for p in data:
+            processed = process_and_score_paper(p)
+            if processed: refined_list.append(processed)
+        
+        print(f"📡 顶会阶段 Offset={offset}，候选池进度: {len(refined_list)}/{pool_size}")
+        offset += batch_size
+        time.sleep(2) # 防封保护
 
-    refined_list.sort(key=lambda x: x['quality_score'], reverse=True)
-    if len(refined_list) >= target_count:
-        print(f"✅ 第一轮检索达标！共找到 {len(refined_list)} 篇。")
-        return refined_list[:target_count]
-
-    print(f"⚠️ 顶会论文数量不足，开启全局图谱搜索作为替补...")
-    stage2_data = fetch_from_api_with_retry(endpoint, base_params)
-    for p in stage2_data:
-        processed_p = process_and_score_paper(p)
-        if processed_p:
-            refined_list.append(processed_p)
+    # -----------------------------------------------------------------
+    # 第二阶段：补位逻辑
+    # -----------------------------------------------------------------
+    if len(refined_list) < pool_size:
+        print(f"⚠️ 顶会池不足，开启全局搜索补位...")
+        offset = 0
+        while len(refined_list) < pool_size and offset < 1000:
+            stage2_params = base_params.copy()
+            stage2_params["offset"] = offset
             
+            data = fetch_from_api_with_retry(endpoint, stage2_params)
+            if not data: break
+            
+            for p in data:
+                processed = process_and_score_paper(p)
+                if processed: refined_list.append(processed)
+            
+            print(f"🌐 全局阶段 Offset={offset}，总进度: {len(refined_list)}/{pool_size}")
+            offset += batch_size
+            time.sleep(2)
+
+    # 按分数全局排序，返回最高质量的候选
     refined_list.sort(key=lambda x: x['quality_score'], reverse=True)
-    print(f"✅ 两轮检索完成。池内新论文: {len(refined_list)} 篇")
-    return refined_list[:target_count]
+    return refined_list[:pool_size]
 
 # =================================================================
-# 3. 分析与导出 (为了能在 GitHub Actions 中调用，我们让它返回 Markdown 文本)
+# 3. 分析与导出
 # =================================================================
 def analyze_and_report(papers):
     if not papers:
@@ -161,7 +187,7 @@ def analyze_and_report(papers):
                 
                 full_report += content
 
-                # 追加写入黑名单
+                # 记录 ID
                 with open(DB_PATH, "a") as f:
                     f.write(f"{p['paperId']}\n")
 
@@ -170,7 +196,9 @@ def analyze_and_report(papers):
             except Exception as e:
                 if "429" in str(e) or "RESOURCE_EXHAUSTED" in str(e):
                     attempts += 1
-                    time.sleep(35 + (attempts * 10))
+                    wait_time = 35 + (attempts * 10)
+                    print(f"⚠️ Gemini 限流，等待 {wait_time} 秒...")
+                    time.sleep(wait_time)
                 else:
                     print(f"❌ 解析失败: {e}")
                     break
@@ -182,7 +210,7 @@ def analyze_and_report(papers):
         f.write(full_report)
     print(f"✅ 报告已保存至 {save_path}")
     
-    # 将报告内容写入 GitHub Actions 的环境变量中，方便下一步发布 Issue
+    # 💡 写入 REPORT_CONTENT.md 供 GitHub Actions 后续步骤读取
     with open("REPORT_CONTENT.md", "w", encoding="utf-8") as f:
         f.write(full_report)
 
@@ -190,16 +218,23 @@ def analyze_and_report(papers):
 # 4. 执行入口 (用户配置区)
 # =================================================================
 if __name__ == "__main__":
-    # 👇 [用户修改区] 在这里填入你想追踪的学术关键词
+    # 👇 [用户修改区] 学术关键词
     TOPIC = "LLM Agents planning reasoning"
     
-    # 👇 [用户修改区] 每天你想看几篇论文？(建议 1-3 篇,过多的论文会触发ai的限流)
-    TARGET_COUNT = 1
+    # 👇 [用户修改区] 每天最终分析几篇？(选出候选池中最强的 N 篇)
+    TARGET_COUNT = 1 
 
-    print(f"🔍 启动任务：搜索【{TOPIC}】领域的顶级论文...")
+    # 👇 [用户修改区] 候选池大小和每页抓取量
+    POOL_SIZE = 50
+    BATCH_SIZE = 50
+
+    print(f"🔍 启动任务：从 {POOL_SIZE} 篇候选论文中筛选【{TOPIC}】精华...")
     
-    # 运行图谱检索
-    top_papers = fetch_elite_papers(TOPIC, target_count=TARGET_COUNT)
+    # 运行多页检索
+    candidate_pool = fetch_elite_papers(TOPIC, pool_size=POOL_SIZE, batch_size=BATCH_SIZE)
     
-    # 运行 AI 深度分析并导出报告
-    analyze_and_report(top_papers)
+    # 从候选池中提取排名前 TARGET_COUNT 的论文进行 AI 分析
+    final_selection = candidate_pool[:TARGET_COUNT]
+    
+    # 运行 AI 深度分析
+    analyze_and_report(final_selection)
