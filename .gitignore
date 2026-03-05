@@ -1,0 +1,11 @@
+# Python 缓存
+__pycache__/
+*.py[cod]
+*$py.class
+
+# 本地环境变量
+.env
+
+# 编辑器配置
+.vscode/
+.idea/
