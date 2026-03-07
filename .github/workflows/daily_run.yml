@@ -12,9 +12,11 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
+    # 设置总超时 15 分钟，防止脚本卡死浪费 Actions 额度
+    timeout-minutes: 15 
 
     steps:
-      - name: 📥 检出代码（完整历史，允许 push）
+      - name: 📥 检出代码
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
@@ -29,71 +31,47 @@ jobs:
       - name: 📦 安装依赖包
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt
+          # 确保 requirements.txt 包含 langchain-google-genai 和 requests
+          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
 
-      - name: 🚀 运行 AI 论文爬虫与分析
+      - name: 🚀 运行 AI 论文分析 (带自动重试)
+        # 💡 这里使用了 retry action：如果脚本出错，它会等待一段时间后重新运行
+        uses: nick-fields/retry@v3
+        with:
+          timeout_minutes: 11     # 单次运行略大于脚本内部的 10 分钟限时
+          max_attempts: 3         # 脚本如果完全失败，最多重启 3 次
+          retry_wait_seconds: 60  # 失败后等 1 分钟再试（避开严重的 API 封锁）
+          command: python main.py
         env:
           GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
-        run: python main.py
 
-      - name: 💾 将新记录的黑名单和报告保存到 GitHub 仓库（安全的 fetch/rebase/push）
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: 💾 保存记录与报告 (安全提交)
+        if: always() # 即使之前步骤失败，也要尝试保存已有的进度记录
         run: |
-          set -euo pipefail
-
           git config --local user.email "action@github.com"
           git config --local user.name "GitHub Action Bot"
-
-          # 添加变更（如果有）
+          
           git add data/elite_processed_ids.txt reports/ || true
-
-          # 如果没有变更则退出成功
+          
           if git diff --quiet && git diff --staged --quiet; then
             echo "No changes to commit"
-            exit 0
-          fi
-
-          git commit -m "📝 Auto-update paper history and reports" || true
-
-          # 抓取远端并尝试 rebase（安全合并远端改动）
-          git fetch origin main
-
-          # 尝试 rebase，如果失败则中止并退出（避免覆盖远端）
-          if git rebase origin/main; then
-            echo "Rebase succeeded, pushing..."
-            if git push origin main; then
-              echo "Push succeeded"
-            else
-              echo "Push rejected, attempting one safe retry (fetch+rebase+push)..."
-              git fetch origin main
-              if git rebase origin/main; then
-                git push origin main
-              else
-                echo "Rebase failed on retry, aborting to avoid overwriting remote changes"
-                git rebase --abort || true
-                exit 1
-              fi
-            fi
           else
-            echo "Initial rebase failed, aborting to avoid overwriting remote changes"
-            git rebase --abort || true
-            exit 1
+            git commit -m "📝 Auto-update paper history and reports"
+            # 使用简单的 pull --rebase 策略，更稳健
+            git pull --rebase origin main
+            git push origin main
           fi
 
-      - name: 🔧 安装 GitHub CLI（可选，确保 gh 可用）
-        if: always()
-        run: |
-          sudo apt-get update -y
-          sudo apt-get install -y gh || true
-
-      - name: 🔔 创建 GitHub Issue 进行推送 (手机提醒)
+      - name: 🔔 创建 GitHub Issue (手机提醒)
+        # 只有生成了 REPORT_CONTENT.md 且当前是成功状态时才创建
+        if: success() 
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           if [ -f "REPORT_CONTENT.md" ]; then
             DATE_STR=$(date +'%Y-%m-%d')
-            gh issue create --title "💎 顶级 AI 论文日报 ($DATE_STR)" --body-file REPORT_CONTENT.md || echo "gh issue create failed"
+            # 直接使用内置的 gh 命令
+            gh issue create --title "💎 顶级 AI 论文日报 ($DATE_STR)" --body-file REPORT_CONTENT.md
           else
             echo "没有生成新报告，跳过 Issue 推送。"
           fi
