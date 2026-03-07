@@ -11,10 +11,6 @@ permissions:
 
 jobs:
   build:
-    concurrency:
-      group: elite-paper-daily-bot
-      cancel-in-progress: false
-
     runs-on: ubuntu-latest
 
     steps:
@@ -58,18 +54,14 @@ jobs:
             exit 0
           fi
 
-          # 提交本地变更
           git commit -m "📝 Auto-update paper history and reports" || true
 
-          # 使用 token 设置远端 URL，确保有权限 push
-          git remote set-url origin "https://x-access-token:${GITHUB_TOKEN}@github.com/${{ github.repository }}.git"
-
-          # 抓取远端最新
+          # 抓取远端并尝试 rebase（安全合并远端改动）
           git fetch origin main
 
-          # 尝试 rebase；若成功则 push；若失败则把本地变更推到新分支以便人工合并
+          # 尝试 rebase，如果失败则中止并退出（避免覆盖远端）
           if git rebase origin/main; then
-            echo "Rebase succeeded, attempting push..."
+            echo "Rebase succeeded, pushing..."
             if git push origin main; then
               echo "Push succeeded"
             else
@@ -80,22 +72,12 @@ jobs:
               else
                 echo "Rebase failed on retry, aborting to avoid overwriting remote changes"
                 git rebase --abort || true
-                # 将本地变更保存到新分支，便于人工合并
-                BRANCH="auto-update-$(date +%s)"
-                git checkout -b "$BRANCH"
-                git push origin "$BRANCH"
-                echo "Created branch $BRANCH with local changes; please merge manually"
                 exit 1
               fi
             fi
           else
             echo "Initial rebase failed, aborting to avoid overwriting remote changes"
             git rebase --abort || true
-            # 将本地变更保存到新分支，便于人工合并
-            BRANCH="auto-update-$(date +%s)"
-            git checkout -b "$BRANCH"
-            git push origin "$BRANCH"
-            echo "Created branch $BRANCH with local changes; please merge manually"
             exit 1
           fi
 
