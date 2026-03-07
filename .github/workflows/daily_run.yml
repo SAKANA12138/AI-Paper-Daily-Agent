@@ -1,30 +1,30 @@
 name: 💎 Elite Paper Daily Bot
 
-# 触发条件：每天定时运行 + 允许手动点击运行
 on:
   schedule:
-    # GitHub 使用 UTC 时间。
-    # 如果你在美国西海岸 (PST), 早上 7 点大概是 UTC 15:00 (夏令时14:00) -> 0 15 * * *
-    # 如果你想在北京时间早上 7 点运行，UTC 就是前一天的 23:00 -> 0 23 * * *
-    - cron: '0 23 * * *' 
-  workflow_dispatch: # 这个允许你在 GitHub 网页上直接点个按钮测试代码！
+    - cron: '0 23 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  issues: write
 
 jobs:
   build:
     runs-on: ubuntu-latest
-    permissions:
-      contents: write  # 允许代码把自己产生的新数据 commit 到仓库
-      issues: write    # 允许自动创建 Issue（用来当做手机推送）
 
     steps:
-      - name: 📥 检出代码
+      - name: 📥 检出代码（完整历史，允许 push）
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: true
 
       - name: 🐍 配置 Python 环境
         uses: actions/setup-python@v5
         with:
           python-version: '3.10'
-          cache: 'pip' # 加速依赖安装
+          cache: 'pip'
 
       - name: 📦 安装依赖包
         run: |
@@ -36,13 +36,56 @@ jobs:
           GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
         run: python main.py
 
-      - name: 💾 将新记录的黑名单和报告保存到 GitHub 仓库
+      - name: 💾 将新记录的黑名单和报告保存到 GitHub 仓库（安全的 fetch/rebase/push）
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          set -euo pipefail
+
           git config --local user.email "action@github.com"
           git config --local user.name "GitHub Action Bot"
-          git add data/elite_processed_ids.txt reports/
-          # 只有当有文件变动时才 commit，防止报错
-          git diff --quiet && git diff --staged --quiet || (git commit -m "📝 Auto-update paper history and reports" && git push)
+
+          # 添加变更（如果有）
+          git add data/elite_processed_ids.txt reports/ || true
+
+          # 如果没有变更则退出成功
+          if git diff --quiet && git diff --staged --quiet; then
+            echo "No changes to commit"
+            exit 0
+          fi
+
+          git commit -m "📝 Auto-update paper history and reports" || true
+
+          # 抓取远端并尝试 rebase（安全合并远端改动）
+          git fetch origin main
+
+          # 尝试 rebase，如果失败则中止并退出（避免覆盖远端）
+          if git rebase origin/main; then
+            echo "Rebase succeeded, pushing..."
+            if git push origin main; then
+              echo "Push succeeded"
+            else
+              echo "Push rejected, attempting one safe retry (fetch+rebase+push)..."
+              git fetch origin main
+              if git rebase origin/main; then
+                git push origin main
+              else
+                echo "Rebase failed on retry, aborting to avoid overwriting remote changes"
+                git rebase --abort || true
+                exit 1
+              fi
+            fi
+          else
+            echo "Initial rebase failed, aborting to avoid overwriting remote changes"
+            git rebase --abort || true
+            exit 1
+          fi
+
+      - name: 🔧 安装 GitHub CLI（可选，确保 gh 可用）
+        if: always()
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y gh || true
 
       - name: 🔔 创建 GitHub Issue 进行推送 (手机提醒)
         env:
@@ -50,8 +93,7 @@ jobs:
         run: |
           if [ -f "REPORT_CONTENT.md" ]; then
             DATE_STR=$(date +'%Y-%m-%d')
-            # 使用 GitHub CLI 自动发布一个 Issue
-            gh issue create --title "💎 顶级 AI 论文日报 ($DATE_STR)" --body-file REPORT_CONTENT.md
+            gh issue create --title "💎 顶级 AI 论文日报 ($DATE_STR)" --body-file REPORT_CONTENT.md || echo "gh issue create failed"
           else
             echo "没有生成新报告，跳过 Issue 推送。"
           fi
