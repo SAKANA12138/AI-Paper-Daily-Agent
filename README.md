@@ -1,6 +1,45 @@
 # 💎 Elite AI Paper Daily Bot 
 **基于 Gemini 2.5 Flash 与 GitHub Actions 的“无服务器 (Serverless)”学术论文追踪智能体**
 
+## 📄 毕业论文项目：推荐系统在分布偏移下的鲁棒性研究
+
+本仓库同时包含曲阜师范大学本科毕业论文相关文件，论文主题为**"推荐系统在分布偏移下的鲁棒性研究"**。
+
+### 论文文件说明
+
+| 文件 | 说明 |
+|------|------|
+| [`thesis_main.docx`](thesis_main.docx) | 完整 Word 论文文档（按曲阜师范大学格式规范） |
+| [`thesis_data.csv`](thesis_data.csv) | 实验结果数据（10 随机种子 × 5 偏移比例 × 3 模型） |
+| [`thesis_requirements.txt`](thesis_requirements.txt) | 论文实验所用 Python 依赖清单 |
+
+### 研究概述
+
+- **研究对象**：Caser（卷积序列模型）、DeepFM（深度因子分解机）、Hybrid（融合架构）
+- **实验平台**：MovieLens 25M，10 个随机种子（42–51），5 个偏移比例（ρ ∈ {0, 0.05, 0.1, 0.2, 0.3}）
+- **核心发现**：
+  - Hybrid 融合模型鲁棒性最优，NDCG@10 提升 **+19.0%**（ρ=0.3，Cohen's d=3.481）
+  - DeepFM 表现稳健，NDCG@10 提升 **+10.8%**
+  - Caser 序列模型最脆弱，NDCG@10 下降 **-1.8%**
+
+### 快速复现实验
+
+```bash
+# 安装依赖
+pip install -r thesis_requirements.txt
+
+# 查看实验数据
+python - <<'PYEOF'
+import pandas as pd
+df = pd.read_csv("thesis_data.csv")
+print(df.groupby(["model","shift_ratio"])["NDCG@10"].mean().unstack())
+'PYEOF'
+```
+
+---
+
+
+
 这是一个高度自动化的 AI 论文筛选与解剖系统。它每天会自动从全网海量论文中，筛选出你最关心的领域的**顶级会议/高影响力论文**，并利用大语言模型（LLM）进行深度剖析，最后以精美的 Markdown 格式推送到你的手机（通过 GitHub Issues）。
 
 ## ✨ 核心特性
