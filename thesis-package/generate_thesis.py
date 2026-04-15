@@ -221,6 +221,7 @@ print("[OK] table7_regional_heterogeneity.csv")
 
 # 分区域描述性统计
 reg_desc = df.groupby("region")[desc_cols].mean().round(4)
+reg_desc.index.name = "区域"
 reg_desc.to_csv("results/tables/table8_summary_statistics_by_region.csv", encoding="utf-8-sig")
 print("[OK] table8_summary_statistics_by_region.csv")
 

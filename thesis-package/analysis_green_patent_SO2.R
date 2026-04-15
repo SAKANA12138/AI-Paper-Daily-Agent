@@ -202,9 +202,11 @@ hausman_text <- paste0(
   "自由度: ", hausman_result$parameter, "\n",
   "P值: ", format.pval(hausman_result$p.value, digits = 4), "\n",
   "=====================================\n",
-  ifelse(hausman_result$p.value < 0.05,
-         "结论：在5%显著性水平下拒绝随机效应假设，选择固定效应（FE）模型",
-         "结论：不能拒绝随机效应假设，选择随机效应（RE）模型"), "\n"
+  ifelse(hausman_result$p.value < 0.01,
+         "结论：在1%显著性水平下拒绝随机效应假设，选择固定效应（FE）模型",
+         ifelse(hausman_result$p.value < 0.05,
+                "结论：在5%显著性水平下拒绝随机效应假设，选择固定效应（FE）模型",
+                "结论：不能拒绝随机效应假设，选择随机效应（RE）模型")), "\n"
 )
 cat("\n", hausman_text)
 writeLines(hausman_text, "results/tables/table4_hausman_test.txt")
@@ -238,47 +240,49 @@ coeftest_fe_base <- coeftest(fe_base, vcov = vcovHC(fe_base, type = "HC3"))
 coeftest_fe_ekc  <- coeftest(fe_ekc,  vcov = vcovHC(fe_ekc,  type = "HC3"))
 coeftest_iv      <- coeftest(iv_model, vcov = vcovHC(iv_model, type = "HC3"))
 
-cat("\n📊 FE基准模型结果：\n")
+cat("\n📊 FE基准模型结果（稳健标准误）：\n")
 print(coeftest_fe_base)
 
-# 整理回归结果表
-get_coef_row <- function(model_result, varname, model_name) {
-  coefs <- model_result[, 1]
-  ses   <- model_result[, 2]
-  pvals <- model_result[, 4]
-  idx   <- which(rownames(model_result) == varname)
-  if (length(idx) == 0) return(c(model_name, varname, NA, NA, NA))
-  stars <- ifelse(pvals[idx] < 0.01, "***",
-                  ifelse(pvals[idx] < 0.05, "**",
-                         ifelse(pvals[idx] < 0.10, "*", "")))
-  c(model_name, varname,
-    paste0(round(coefs[idx], 4), stars),
-    paste0("(", round(ses[idx], 4), ")"),
-    round(pvals[idx], 4))
+# 整理回归结果表（使用稳健标准误系数和显著性）
+get_stars <- function(pval) {
+  ifelse(pval < 0.01, "***", ifelse(pval < 0.05, "**", ifelse(pval < 0.10, "*", "")))
 }
 
 reg_summary <- data.frame(
   模型 = c("混合OLS", "FE基准", "FE-EKC", "IV-2SLS"),
   ln绿色专利总数系数 = c(
-    round(coef(ols_model)["ln_green_patent"], 4),
-    round(coef(fe_base)["ln_green_patent"], 4),
-    round(coef(fe_ekc)["ln_green_patent"], 4),
-    round(coef(iv_model)["ln_green_patent"], 4)
+    paste0(round(coef(ols_model)["ln_green_patent"], 4),
+           get_stars(summary(ols_model)$coefficients["ln_green_patent", 4])),
+    paste0(round(coeftest_fe_base["ln_green_patent", 1], 4),
+           get_stars(coeftest_fe_base["ln_green_patent", 4])),
+    paste0(round(coeftest_fe_ekc["ln_green_patent", 1], 4),
+           get_stars(coeftest_fe_ekc["ln_green_patent", 4])),
+    paste0(round(coeftest_iv["ln_green_patent", 1], 4),
+           get_stars(coeftest_iv["ln_green_patent", 4]))
   ),
   第二产业占比系数 = c(
-    round(coef(ols_model)["industry_ratio"], 4),
-    round(coef(fe_base)["industry_ratio"], 4),
-    round(coef(fe_ekc)["industry_ratio"], 4),
-    round(coef(iv_model)["industry_ratio"], 4)
+    paste0(round(coef(ols_model)["industry_ratio"], 4),
+           get_stars(summary(ols_model)$coefficients["industry_ratio", 4])),
+    paste0(round(coeftest_fe_base["industry_ratio", 1], 4),
+           get_stars(coeftest_fe_base["industry_ratio", 4])),
+    paste0(round(coeftest_fe_ekc["industry_ratio", 1], 4),
+           get_stars(coeftest_fe_ekc["industry_ratio", 4])),
+    paste0(round(coeftest_iv["industry_ratio", 1], 4),
+           get_stars(coeftest_iv["industry_ratio", 4]))
   ),
   ln人均GDP系数 = c(
-    round(coef(ols_model)["ln_real_gdpc"], 4),
-    round(coef(fe_base)["ln_real_gdpc"], 4),
-    round(coef(fe_ekc)["ln_real_gdpc"], 4),
-    round(coef(iv_model)["ln_real_gdpc"], 4)
+    paste0(round(coef(ols_model)["ln_real_gdpc"], 4),
+           get_stars(summary(ols_model)$coefficients["ln_real_gdpc", 4])),
+    paste0(round(coeftest_fe_base["ln_real_gdpc", 1], 4),
+           get_stars(coeftest_fe_base["ln_real_gdpc", 4])),
+    paste0(round(coeftest_fe_ekc["ln_real_gdpc", 1], 4),
+           get_stars(coeftest_fe_ekc["ln_real_gdpc", 4])),
+    paste0(round(coeftest_iv["ln_real_gdpc", 1], 4),
+           get_stars(coeftest_iv["ln_real_gdpc", 4]))
   ),
   EKC平方项系数 = c(NA, NA,
-    round(coef(fe_ekc)["ln_real_gdpc_sq"], 4),
+    paste0(round(coeftest_fe_ekc["ln_real_gdpc_sq", 1], 4),
+           get_stars(coeftest_fe_ekc["ln_real_gdpc_sq", 4])),
     NA
   ),
   观测数 = c(nrow(panel_data), nrow(panel_data), nrow(panel_data),
@@ -365,7 +369,7 @@ cat("✅ 表7保存：table7_regional_heterogeneity.csv\n")
 
 # 分区域描述性统计
 region_desc <- panel_data %>%
-  group_by(region) %>%
+  group_by(区域 = region) %>%
   summarise(
     SO2均值 = round(mean(SO2_intensity), 4),
     绿专均值 = round(mean(ln_green_patent), 4),
@@ -395,7 +399,7 @@ so2_trend <- panel_data %>%
   summarise(mean_SO2 = mean(SO2_intensity), .groups = "drop")
 
 fig1 <- ggplot(so2_trend, aes(x = year, y = mean_SO2, color = region, group = region)) +
-  geom_line(size = 1.2) +
+  geom_line(linewidth = 1.2) +
   geom_point(size = 2.5) +
   scale_color_manual(values = c("东部" = "#2196F3", "中部" = "#FF9800", "西部" = "#4CAF50")) +
   labs(title = "图1 中国各区域工业SO₂排放强度时间趋势（2005-2015）",
