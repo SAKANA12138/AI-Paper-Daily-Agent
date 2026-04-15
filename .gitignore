@@ -9,3 +9,4 @@ __pycache__/
 # 编辑器配置
 .vscode/
 .idea/
+# Thesis package - no exclusions (all files should be committed)
